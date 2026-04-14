@@ -386,49 +386,63 @@ class TaxReportGenerator {
   }
 }
 
+class SessionStore {
+  constructor(redisClient) {
+    this.redis = redisClient;
+    this.TTL = 60 * 60 * 24; // 24 hours
+  }
+
+  async save(sessionId, data) {
+    await this.redis.set(`session:${sessionId}`, JSON.stringify(data), { EX: this.TTL });
+  }
+
+  async load(sessionId) {
+    const raw = await this.redis.get(`session:${sessionId}`);
+    return raw ? JSON.parse(raw) : null;
+  }
+}
+
 class TaxGhostApp {
-  constructor() {
+  constructor(redisClient) {
     this.zkEngine = new ZKProofEngine();
     this.analyzer = new TransactionAnalyzer();
     this.liquify = new LiquifyClient();
     this.ipfs = new IPFSStorage();
     this.reportGenerator = new TaxReportGenerator(this.zkEngine, this.analyzer);
-    this.sessions = new Map();
+    this.store = new SessionStore(redisClient);
   }
 
-  createSession() {
+  async createSession() {
     const sessionId = crypto.randomUUID();
-    this.sessions.set(sessionId, {
+    const session = {
       id: sessionId,
       createdAt: Date.now(),
       transactions: [],
       reports: []
-    });
- 
+    };
+    await this.store.save(sessionId, session);
     return sessionId;
   }
 
-  getSession(sessionId) {
- 
-    return this.sessions.get(sessionId);
+  async getSession(sessionId) {
+    return await this.store.load(sessionId);
   }
 
   async analyzeWallet(sessionId, addresses, options = {}) {
-    const session = this.getSession(sessionId);
- 
+    const session = await this.getSession(sessionId);
     if (!session) throw new Error('Invalid session');
 
     const rawTxs = await this.liquify.getTransactions(addresses, options);
     const analyzed = await this.analyzer.analyzeTransactions(rawTxs);
-    
+
     session.transactions = analyzed;
- 
+    await this.store.save(sessionId, session);
+
     return { transactionCount: analyzed.length, transactions: analyzed.slice(0, 10) };
   }
 
   async generateTaxReport(sessionId, taxYear, jurisdiction) {
-    const session = this.getSession(sessionId);
- 
+    const session = await this.getSession(sessionId);
     if (!session) throw new Error('Invalid session');
 
     const report = await this.reportGenerator.generateReport(
@@ -442,12 +456,12 @@ class TaxGhostApp {
     report.ipfsUrl = stored.url;
 
     session.reports.push(report);
- 
+    await this.store.save(sessionId, session);
+
     return report;
   }
 
   verifyProof(proofId) {
- 
     return this.zkEngine.verifyProof(proofId);
   }
 }
@@ -477,10 +491,16 @@ function sendError(res, message, status = 400) {
 }
 
 export default async function runApp({ port }) {
-  const app = new TaxGhostApp();
+  // --- Redis setup ---
+  const { createClient } = await import('redis');
+  const redisClient = createClient({ url: process.env.REDIS_URL });
+  redisClient.on('error', (err) => console.error('Redis error:', err));
+  await redisClient.connect();
+  console.log('Redis connected');
+
+  const app = new TaxGhostApp(redisClient);
 
   const server = http.createServer(async (req, res) => {
- 
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
         'Access-Control-Allow-Origin': '*',
@@ -488,16 +508,14 @@ export default async function runApp({ port }) {
         'Access-Control-Allow-Headers': 'Content-Type'
       });
       res.end();
- 
-    return;
+      return;
     }
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname;
 
     try {
- 
-    if (path === '/' && req.method === 'GET') {
+      if (path === '/' && req.method === 'GET') {
         sendJSON(res, {
           name: 'TaxGhost',
           tagline: 'Privacy-First Tax Tool',
@@ -510,98 +528,61 @@ export default async function runApp({ port }) {
             'GET /api/session/:id - Get session data'
           ]
         });
- 
-    return;
+        return;
       }
 
- 
-    if (path === '/api/session' && req.method === 'POST') {
-        const sessionId = app.createSession();
+      if (path === '/api/session' && req.method === 'POST') {
+        const sessionId = await app.createSession();
         sendJSON(res, { sessionId, message: 'Anonymous session created' });
- 
-    return;
+        return;
       }
 
- 
-    if (path === '/api/analyze' && req.method === 'POST') {
+      if (path === '/api/analyze' && req.method === 'POST') {
         const body = await parseBody(req);
         const { sessionId, addresses, chain, limit } = body;
-        
- 
-    if (!sessionId) {
-          sendError(res, 'sessionId required');
- 
-    return;
-        }
- 
-    if (!addresses || !Array.isArray(addresses)) {
-          sendError(res, 'addresses array required');
- 
-    return;
-        }
-
+        if (!sessionId) { sendError(res, 'sessionId required'); return; }
+        if (!addresses || !Array.isArray(addresses)) { sendError(res, 'addresses array required'); return; }
         const result = await app.analyzeWallet(sessionId, addresses, { chain, limit });
         sendJSON(res, result);
- 
-    return;
+        return;
       }
 
- 
-    if (path === '/api/report' && req.method === 'POST') {
+      if (path === '/api/report' && req.method === 'POST') {
         const body = await parseBody(req);
         const { sessionId, taxYear, jurisdiction } = body;
-        
- 
-    if (!sessionId) {
-          sendError(res, 'sessionId required');
- 
-    return;
-        }
-
+        if (!sessionId) { sendError(res, 'sessionId required'); return; }
         const report = await app.generateTaxReport(
           sessionId,
           taxYear || new Date().getFullYear() - 1,
           jurisdiction || 'US'
         );
         sendJSON(res, report);
- 
-    return;
+        return;
       }
 
- 
-    if (path.startsWith('/api/verify/') && req.method === 'GET') {
+      if (path.startsWith('/api/verify/') && req.method === 'GET') {
         const proofId = path.split('/')[3];
         const result = app.verifyProof(proofId);
         sendJSON(res, result);
- 
-    return;
+        return;
       }
 
- 
-    if (path.startsWith('/api/session/') && req.method === 'GET') {
+      if (path.startsWith('/api/session/') && req.method === 'GET') {
         const sessionId = path.split('/')[3];
-        const session = app.getSession(sessionId);
- 
-    if (!session) {
-          sendError(res, 'Session not found', 404);
- 
-    return;
-        }
+        const session = await app.getSession(sessionId);
+        if (!session) { sendError(res, 'Session not found', 404); return; }
         sendJSON(res, {
           id: session.id,
           createdAt: session.createdAt,
           transactionCount: session.transactions.length,
           reportCount: session.reports.length
         });
- 
-    return;
+        return;
       }
 
- 
-    if (path === '/health' && req.method === 'GET') {
+      if (path === '/health' && req.method === 'GET') {
         sendJSON(res, { status: 'healthy', timestamp: Date.now() });
- 
-    return;
+        return;
       }
 
       sendError(res, 'Not found', 404);
