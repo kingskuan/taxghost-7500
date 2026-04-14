@@ -253,39 +253,79 @@ class LiquifyClient {
   }
 
   generateMockTransactions(addresses, options) {
-    const txTypes = ['swap', 'deposit', 'withdraw', 'reward', 'transfer'];
     const protocols = ['Uniswap V3', 'Aave V3', 'Curve', 'Yearn', 'Lido'];
-    const tokens = ['ETH', 'USDC', 'WBTC', 'DAI', 'LINK', 'UNI', 'AAVE'];
-    
+    const tokens = ['ETH', 'WBTC', 'LINK', 'UNI', 'AAVE'];
     const count = options.limit || 50;
     const txs = [];
-    
- 
-    for (let i = 0; i < count; i++) {
-      const type = txTypes[Math.floor(Math.random() * txTypes.length)];
-      const timestamp = Date.now() - Math.random() * 365 * 24 * 60 * 60 * 1000;
-      
+    const now = Date.now();
+    const oneYear = 365 * 24 * 60 * 60 * 1000;
+    const from = addresses[0] || '0x' + crypto.randomBytes(20).toString('hex');
+
+    // Generate realistic buy->sell pairs (60% of transactions)
+    const pairCount = Math.floor(count * 0.3);
+    for (let i = 0; i < pairCount; i++) {
+      const token = tokens[Math.floor(Math.random() * tokens.length)];
+      const buyTime = now - oneYear + Math.random() * oneYear * 0.5;
+      const sellTime = buyTime + Math.random() * oneYear * 0.4 + oneYear * 0.05;
+      const buyPrice = 1000 + Math.random() * 8000;
+      const sellPrice = buyPrice * (0.8 + Math.random() * 0.8);
+
       txs.push({
         hash: '0x' + crypto.randomBytes(32).toString('hex'),
         blockNumber: Math.floor(18000000 + Math.random() * 1000000),
-        timestamp,
- 
-    from: addresses[0] || '0x' + crypto.randomBytes(20).toString('hex'),
-        to: '0x' + crypto.randomBytes(20).toString('hex'),
+        timestamp: buyTime,
+        from, to: '0x' + crypto.randomBytes(20).toString('hex'),
+        type: 'buy',
+        protocol: protocols[Math.floor(Math.random() * protocols.length)],
+        tokenIn: 'USDC', tokenOut: token,
+        amountIn: (buyPrice / 100).toFixed(4),
+        amountOut: (Math.random() * 5 + 0.5).toFixed(4),
+        valueUSD: buyPrice,
+        chain: options.chain || 'ethereum',
+        gasUsed: Math.floor(Math.random() * 300000 + 50000),
+        gasPrice: Math.floor(Math.random() * 80 + 10) + 'gwei'
+      });
+
+      txs.push({
+        hash: '0x' + crypto.randomBytes(32).toString('hex'),
+        blockNumber: Math.floor(18000000 + Math.random() * 1000000),
+        timestamp: sellTime,
+        from, to: '0x' + crypto.randomBytes(20).toString('hex'),
+        type: 'sell',
+        protocol: protocols[Math.floor(Math.random() * protocols.length)],
+        tokenIn: token, tokenOut: 'USDC',
+        amountIn: (Math.random() * 5 + 0.5).toFixed(4),
+        amountOut: (sellPrice / 100).toFixed(4),
+        valueUSD: sellPrice,
+        chain: options.chain || 'ethereum',
+        gasUsed: Math.floor(Math.random() * 300000 + 50000),
+        gasPrice: Math.floor(Math.random() * 80 + 10) + 'gwei'
+      });
+    }
+
+    // Fill remaining with rewards, swaps, transfers
+    const otherTypes = ['reward', 'swap', 'transfer', 'deposit', 'withdraw'];
+    const remaining = count - txs.length;
+    for (let i = 0; i < remaining; i++) {
+      const type = otherTypes[Math.floor(Math.random() * otherTypes.length)];
+      txs.push({
+        hash: '0x' + crypto.randomBytes(32).toString('hex'),
+        blockNumber: Math.floor(18000000 + Math.random() * 1000000),
+        timestamp: now - Math.random() * oneYear,
+        from, to: '0x' + crypto.randomBytes(20).toString('hex'),
         type,
         protocol: protocols[Math.floor(Math.random() * protocols.length)],
         tokenIn: tokens[Math.floor(Math.random() * tokens.length)],
         tokenOut: tokens[Math.floor(Math.random() * tokens.length)],
         amountIn: (Math.random() * 10).toFixed(4),
         amountOut: (Math.random() * 10).toFixed(4),
-        valueUSD: Math.random() * 10000,
+        valueUSD: Math.random() * 5000,
         chain: options.chain || 'ethereum',
         gasUsed: Math.floor(Math.random() * 500000),
         gasPrice: Math.floor(Math.random() * 100) + 'gwei'
       });
     }
-    
- 
+
     return txs.sort((a, b) => b.timestamp - a.timestamp);
   }
 }
