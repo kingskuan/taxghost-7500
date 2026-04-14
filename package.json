@@ -8,7 +8,8 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "there": "latest"
+    "there": "latest",
+    "redis": "^4.7.0"
   },
   "engines": {
     "node": ">=20"
