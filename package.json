@@ -1,0 +1,16 @@
+{
+  "name": "taxghost",
+  "version": "1.0.0",
+  "description": "TaxGhost — 隐私优先税务工具",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "there": "latest"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
